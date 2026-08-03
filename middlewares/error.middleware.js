@@ -1,32 +1,20 @@
 const errorMiddleware = (err, req, res, next) => {
     try {
-        let error = { ...err};
-        error.massage = err.message;
-
         console.error(err);
 
-        // Mongoose bad objectId
-        if (err.name === 'CastError') {
-            const massage = 'Resource not found';
-            error = new Error(massage);
-            error.statusCode = 404;
+        const statusCode = err.status || err.statusCode || 500;
+        const message = err.message || 'Server Error';
+
+        // SQLite constraint errors
+        if (err.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+            return res.status(409).json({ success: false, error: 'Duplicate entry — this record already exists' });
         }
 
-        // Mongoose duplicate key
-        if (err.name === 11000) {
-            const massage = 'Duplicate field value entered';
-            error = new Error(massage);
-            error.statusCode = 400;
+        if (err.code === 'SQLITE_CONSTRAINT_FOREIGNKEY') {
+            return res.status(400).json({ success: false, error: 'Referenced resource does not exist' });
         }
 
-        // Mongoose validation error
-        if (err.name === 'ValidationError') {
-            const massage = Object.values(err.errors).map(val => val.message);
-            error = new Error(massage.join(', '));
-            error.statusCode = 400;
-        }
-
-        res.status(error.statusCode || 500).json({ success: false, error: error.massage || 'Server Error'});
+        res.status(statusCode).json({ success: false, error: message });
     } catch (error) {
         next(error);
     }

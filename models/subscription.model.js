@@ -1,89 +1,112 @@
-import mongoose from 'mongoose';
+import db from '../database/sqlite.js';
 
-const subscriptionSchema = new mongoose.Schema({
-    name: {
-        type: String,
-        required: [true, 'Subscription is required'],
-        trim: true,
-        minlength: 6,
-        maxlength: 100,
-    },
-    price: {
-        type: Number,
-        required: [true, 'Price is required'],
-        min: [0, 'Price must be greater than 0'],
-    },
-    currency: {
-        type: String,
-        enum: ['USD', 'EUR', 'TL'],
-        default: 'USD',
-    },
-    frequency: {
-        type: String,
-        enum: ['daily', 'weekly',  'monthly', 'yearly'],
-    },
-    category: {
-        type: String,
-        enum: ['sports', 'news', 'entertainment', 'lifestyle', 'technology', 'finance', 'politics', 'other'],
-        required: true
-    },
-    paymentMethod: {
-        type: String,
-        required: true,
-        trim: true
-    },
-    status: {
-        type: String,
-        enum: ['active', 'cancelled', 'expired'],
-        default: 'active',
-    },
-    startDate: {
-        type: Date,
-        required: true,
-        validate: {
-            validator: (value) => value <=  new Date(),
-            massage: 'Start date must be in the past'
+/**
+ * Computes the renewal date from a start date and frequency.
+ * @param {string} startDate - ISO date string
+ * @param {string} frequency - 'daily' | 'weekly' | 'monthly' | 'yearly'
+ * @returns {string} ISO date string
+ */
+const computeRenewalDate = (startDate, frequency) => {
+    const date = new Date(startDate);
+    const periods = { daily: 1, weekly: 7, monthly: 30, yearly: 365 };
+    date.setDate(date.getDate() + (periods[frequency] || 30));
+    return date.toISOString();
+};
+
+const Subscription = {
+    /**
+     * Creates a new subscription.
+     * @param {object} data
+     * @returns {object} The created subscription
+     */
+    create({ account_id, name, price, currency = 'USD', frequency, category, payment_method, status = 'active', start_date, renewal_date }) {
+        // Auto-compute renewal date if not provided
+        if (!renewal_date) {
+            renewal_date = computeRenewalDate(start_date, frequency);
         }
-    },
-    renewalDate: {
-        type: Date,
-        validate: {
-            validator: function(value) {
-                return value > this.startDate;
-            },
-            massage: 'Renewal date must be after the start date',
+
+        // Auto-expire if renewal date has passed
+        if (new Date(renewal_date) < new Date()) {
+            status = 'expired';
         }
+
+        const stmt = db.prepare(`
+            INSERT INTO subscriptions (account_id, name, price, currency, frequency, category, payment_method, status, start_date, renewal_date)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+        const result = stmt.run(account_id, name, price, currency, frequency, category, payment_method, status, start_date, renewal_date);
+        return Subscription.findById(result.lastInsertRowid);
     },
-    user: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User',
-        required: true,
-        index: true,
-    }
-}, {timestamps: true});
 
-// Auto-calculate the renewal date if missing.
-subscriptionSchema.pre('save', function (next) {
-    if(!this.renewalDate) {
-        const renewalPeriods = {
-            daily: 1,
-            weekly: 7,
-            monthly: 30,
-            yearly: 365,
-        };
+    /**
+     * Finds all subscriptions for an account.
+     * @param {number} accountId
+     * @returns {object[]}
+     */
+    findByAccount(accountId) {
+        return db.prepare('SELECT * FROM subscriptions WHERE account_id = ? ORDER BY created_at DESC').all(accountId);
+    },
 
-        this.renewalDate = new Date(this.startDate);
-        this.renewalDate.setDate(this.renewalDate.getDate() + renewalPeriods[this.frequency]);
-    }
+    /**
+     * Finds a subscription by ID.
+     * @param {number} id
+     * @returns {object|undefined}
+     */
+    findById(id) {
+        return db.prepare('SELECT * FROM subscriptions WHERE id = ?').get(id);
+    },
 
-    // Auto-update the status if renewal date has passed
-    if(this.renewalDate < new Date()) {
-        this.status = 'expired';
-    }
+    /**
+     * Updates a subscription.
+     * @param {number} id
+     * @param {object} data - Fields to update
+     * @returns {object} The updated subscription
+     */
+    update(id, data) {
+        const allowedFields = ['name', 'price', 'currency', 'frequency', 'category', 'payment_method', 'status', 'start_date', 'renewal_date'];
+        const fields = [];
+        const values = [];
 
-    next();
-})
+        for (const key of allowedFields) {
+            if (data[key] !== undefined) {
+                fields.push(`${key} = ?`);
+                values.push(data[key]);
+            }
+        }
 
-const Subscription = mongoose.model('Subscription', subscriptionSchema);
+        if (fields.length === 0) return Subscription.findById(id);
+
+        fields.push("updated_at = datetime('now')");
+        values.push(id);
+
+        db.prepare(`UPDATE subscriptions SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+        return Subscription.findById(id);
+    },
+
+    /**
+     * Deletes a subscription by ID.
+     * @param {number} id
+     */
+    delete(id) {
+        db.prepare('DELETE FROM subscriptions WHERE id = ?').run(id);
+    },
+
+    /**
+     * Finds subscriptions renewing within N days for an account.
+     * @param {number} accountId
+     * @param {number} days
+     * @returns {object[]}
+     */
+    findUpcomingRenewals(accountId, days = 7) {
+        return db.prepare(`
+            SELECT * FROM subscriptions
+            WHERE account_id = ?
+              AND status = 'active'
+              AND renewal_date <= datetime('now', '+' || ? || ' days')
+              AND renewal_date >= datetime('now')
+            ORDER BY renewal_date ASC
+        `).all(accountId, days);
+    },
+};
 
 export default Subscription;
