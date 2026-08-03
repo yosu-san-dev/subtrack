@@ -8,8 +8,23 @@ import db from '../database/sqlite.js';
  */
 const computeRenewalDate = (startDate, frequency) => {
     const date = new Date(startDate);
-    const periods = { daily: 1, weekly: 7, monthly: 30, yearly: 365 };
-    date.setDate(date.getDate() + (periods[frequency] || 30));
+    const now = new Date();
+
+    // Advance by whole periods until the renewal lands in the future, so a
+    // backdated start_date yields the next upcoming renewal rather than a past one.
+    const advance = () => {
+        switch (frequency) {
+            case 'daily':   date.setDate(date.getDate() + 1); break;
+            case 'weekly':  date.setDate(date.getDate() + 7); break;
+            case 'yearly':  date.setFullYear(date.getFullYear() + 1); break;
+            case 'monthly':
+            default:        date.setMonth(date.getMonth() + 1); break;
+        }
+    };
+
+    advance();
+    while (date < now) advance();
+
     return date.toISOString();
 };
 
@@ -23,10 +38,9 @@ const Subscription = {
         // Auto-compute renewal date if not provided
         if (!renewal_date) {
             renewal_date = computeRenewalDate(start_date, frequency);
-        }
-
-        // Auto-expire if renewal date has passed
-        if (new Date(renewal_date) < new Date()) {
+        } else if (new Date(renewal_date) < new Date()) {
+            // Only an explicitly supplied past renewal_date means expired;
+            // a computed one is always in the future.
             status = 'expired';
         }
 
