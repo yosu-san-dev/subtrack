@@ -51,7 +51,7 @@ Create a `.env.development.local` file in the project root:
 PORT=3000
 NODE_ENV=development
 SERVER_URL=http://localhost:3000
-JWT_SECRET=your-secret-key-here
+JWT_SECRET=<generate-a-secure-random-string>
 ```
 
 | Variable | Description | Default |
