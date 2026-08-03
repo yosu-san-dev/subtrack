@@ -65,3 +65,6 @@ typings/
 *.db
 *.db-wal
 *.db-shm
+
+# Ignore frontend repo folder
+frontend/
